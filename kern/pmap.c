@@ -618,7 +618,7 @@ mmio_map_region(physaddr_t pa, size_t size)
 	if ((base+size) >= MMIOLIM)
 		panic("mimo out of memory!");
 	boot_map_region(kern_pgdir, base, size, pa, PTE_PCD|PTE_PWT|PTE_W);
-	void *ret = base;
+	void *ret = (void *)base;
 	base += size;
 	return ret;
 	//panic("mmio_map_region not implemented");
