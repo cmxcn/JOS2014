@@ -128,6 +128,7 @@ env_init(void)
 	}
 	envs[NENV-1].env_id =0;
 	envs[NENV-1].env_link = 0;
+	envs[NENV-1].env_status = ENV_FREE;
 	env_free_list = &envs[0];
 	// Per-CPU part of the initialization
 	env_init_percpu();
@@ -195,8 +196,7 @@ env_setup_vm(struct Env *e)
 	
 	e->env_pgdir = (pde_t *)(page2kva(p));
 	// copy from kern_pgdir for entries above UTOP
-	for (i = PDX(UTOP); i < NPDENTRIES; i++)
-		e->env_pgdir[i] = kern_pgdir[i];
+	memmove(e->env_pgdir, kern_pgdir, PGSIZE);
 	
 	// UVPT maps the env's own page table read-only.
 	// Permissions: kernel R, user R
@@ -262,7 +262,7 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
 
 	// Enable interrupts while in user mode.
 	// LAB 4: Your code here.
-
+	e->env_tf.tf_eflags |= FL_IF;
 	// Clear the page fault handler until user installs one.
 	e->env_pgfault_upcall = 0;
 
@@ -290,15 +290,17 @@ region_alloc(struct Env *e, void *va, size_t len)
 	// LAB 3: Your code here.
 	// (But only if you need it for load_icode.)
 	//
+	va = ROUNDDOWN(va, PGSIZE);
 	size_t i;
 	struct PageInfo *pp;
-	size_t vend = ROUNDUP((size_t)(va + len), PGSIZE);
-	va = ROUNDDOWN(va, PGSIZE);
+	size_t vend = (size_t)va + ROUNDUP((size_t)(len), PGSIZE);
+
 	for (i = (size_t)va; i < vend; i += PGSIZE) {
 		if(!(pp = page_alloc(0))) {
 			panic("region_alloc panic: out of memory!");
 		}
-		page_insert(e->env_pgdir, pp, (void *)i, PTE_U|PTE_W);
+		if(page_insert(e->env_pgdir, pp, (void *)i, PTE_U|PTE_W))
+			panic("region_alloc: insert failed");
 	}
 	// Hint: It is easier to use region_alloc if the caller can pass
 	//   'va' and 'len' values that are not page-aligned.
@@ -380,10 +382,12 @@ load_icode(struct Env *e, uint8_t *binary)
 			//memsz:  what should be when loaded, equal or greater (due 
 			//to bss section) than filesz
 			region_alloc(e, (void *)ph->p_va, ph->p_memsz);
+			memset((void *)ROUNDDOWN((uintptr_t)ph->p_va, PGSIZE), 0 ,
+				ROUNDUP(ph->p_memsz, PGSIZE));
 			memmove((void *)ph->p_va, (const void *)(binary+ph->p_offset), ph->p_filesz);
 			//initialize bss section
-			if (ph->p_filesz <= ph->p_memsz)
-				memset((void *)(ph->p_va+ph->p_filesz), 0, ph->p_memsz-ph->p_filesz);
+			//if (ph->p_filesz <= ph->p_memsz)
+				//memset((void *)(ph->p_va+ph->p_filesz), 0, ph->p_memsz-ph->p_filesz);
 			}
 	//set the eip as the entry point
 	e->env_tf.tf_eip = (uintptr_t)elfhdr->e_entry;
@@ -409,8 +413,9 @@ env_create(uint8_t *binary, enum EnvType type)
 	// LAB 3: Your code here.
 	struct Env*e;
 	env_alloc(&e, 0);
-	e->env_type = type;
 	load_icode(e, binary);
+	e->env_type = type;
+
 }
 
 //
@@ -548,6 +553,7 @@ env_run(struct Env *e)
 		curenv->env_runs++;
 		lcr3(PADDR(curenv->env_pgdir));
 	}
+	unlock_kernel();
 	env_pop_tf(&curenv->env_tf);
 		//the following code should never be reached!
 		panic("env_run not yet implemented");

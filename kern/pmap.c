@@ -195,7 +195,7 @@ mem_init(void)
 	//    - the new image at UENVS  -- kernel R, user R
 	//    - envs itself -- kernel RW, user NONE
 	// LAB 3: Your code here.
-	boot_map_region(kern_pgdir, UENVS, ROUNDUP((NENV*sizeof(struct Env)), PGSIZE), PADDR(envs), PTE_U);
+	boot_map_region(kern_pgdir, UENVS, PTSIZE,  PADDR(envs), PTE_U);
 	//////////////////////////////////////////////////////////////////////
 	// Use the physical memory that 'bootstack' refers to as the kernel
 	// stack.  The kernel stack grows down from virtual address KSTACKTOP.
@@ -207,7 +207,7 @@ mem_init(void)
 	//       overwrite memory.  Known as a "guard page".
 	//     Permissions: kernel RW, user NONE
 	// Your code goes here:
-	boot_map_region(kern_pgdir, KSTACKTOP-KSTKSIZE, KSTKSIZE, PADDR(bootstacktop)-KSTKSIZE, PTE_W);
+	//boot_map_region(kern_pgdir, KSTACKTOP-KSTKSIZE, KSTKSIZE, PADDR(bootstacktop)-KSTKSIZE, PTE_W);
 	//////////////////////////////////////////////////////////////////////
 	// Map all of physical memory at KERNBASE.
 	// Ie.  the VA range [KERNBASE, 2^32) should map to
@@ -266,7 +266,12 @@ mem_init_mp(void)
 	//     Permissions: kernel RW, user NONE
 	//
 	// LAB 4: Your code here:
-
+	int i;
+	uintptr_t kstacktop_i = KSTACKTOP;
+	for (i = 0; i < NCPU; i++) {
+		boot_map_region(kern_pgdir, kstacktop_i-KSTKSIZE, KSTKSIZE, (physaddr_t)PADDR(&percpu_kstacks[i]), PTE_W);
+		kstacktop_i -= KSTKSIZE+KSTKGAP;
+	}
 }
 
 // --------------------------------------------------------------
@@ -310,9 +315,15 @@ page_init(void)
 	pages[0].pp_ref = 1;
 	pages[0].pp_link = NULL;
 	for (i = 1; i < npages_basemem; i++) {
-		pages[i].pp_ref = 0;
-		pages[i].pp_link = page_free_list;
-		page_free_list = &pages[i];		
+		if (i == PGNUM(MPENTRY_PADDR)) {
+			pages[i].pp_ref = 1;
+			pages[i].pp_link = NULL;
+		}
+		else {
+			pages[i].pp_ref = 0;
+			pages[i].pp_link = page_free_list;
+			page_free_list = &pages[i];		
+		}
 	}
 	//from [EXTPHYSMEM, ...), those below next free page (return by boot_alloc)
 	//are occupied
@@ -603,7 +614,14 @@ mmio_map_region(physaddr_t pa, size_t size)
 	// Hint: The staff solution uses boot_map_region.
 	//
 	// Your code here:
-	panic("mmio_map_region not implemented");
+	size = ROUNDUP(size, PGSIZE);
+	if ((base+size) >= MMIOLIM)
+		panic("mimo out of memory!");
+	boot_map_region(kern_pgdir, base, size, pa, PTE_PCD|PTE_PWT|PTE_W);
+	void *ret = base;
+	base += size;
+	return ret;
+	//panic("mmio_map_region not implemented");
 }
 
 static uintptr_t user_mem_check_addr;
